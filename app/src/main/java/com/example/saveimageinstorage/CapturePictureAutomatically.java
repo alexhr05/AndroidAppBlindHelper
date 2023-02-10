@@ -12,15 +12,17 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
-// a
+
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Build;
@@ -30,11 +32,15 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
+import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.util.Base64;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.Toast;
 
 import com.android.volley.Request;
@@ -55,12 +61,16 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.ProtocolException;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -90,21 +100,46 @@ public class CapturePictureAutomatically extends MainActivity{
     TextToSpeech t1;
     ArrayList<String> result;
     Thread soundForListen;
+    private int mode;
+    boolean isrecognizable = false;
+    private SpeechRecognizer speechRecognizer;
+    private Intent recognizerIntent;
+    private TextToSpeech textToSpeech;
+    MediaPlayer mediaPlayer;
+    EditText editTextTextPersonName;
+    String introductoryWords, instrucionWords;
+    boolean callListening;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
 
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_capture_picture_automatically);
+        // Влиза в режим на слушане за специални думи
+        mode = 1;
+        introductoryWords = "Добър ден Стартира се програма блайнд хелпър. Какво искате да " +
+                "направя за вас. За да разберете повече, кажете думата Инструкции";
+        instrucionWords = "Ако искате да намерите даден предмет, трябва да кажете думата намери и" +
+                " след нея да кажете обекта, който търсите. Например казвате Намери човек или " +
+                "казвате търси котка. Друга функция на приложението е да ви навигира, тоест да" +
+                "каже какво има пред вас и да ви предупреди за него. За да влезете в този реажим" +
+                "кажете думата Навигация. В него например приложението ще Ви казва какво да " +
+                "направите, ако има предмет пред вас, за да стигнете вървите безопасно напред.";
+
+
         bTakePicture = findViewById(R.id.bTakePicture);
         btnStopTakePicture = findViewById(R.id.btnStopTakePicture);
         btnStartTakingPhotos = findViewById(R.id.btnStartTakingPhotos);
         btnShowImage = findViewById(R.id.btnShowImage);
+        editTextTextPersonName = findViewById(R.id.editTextTextPersonName);
 
+        mediaPlayer = MediaPlayer.create(this, R.raw.beep);
+         // no need to call prepare(); create() does that for you
 
         previewView = findViewById(R.id.previewView);
 
-        t1 = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+
+        /*t1 = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
             @Override
             public void onInit(int i) {
                 if(i != TextToSpeech.ERROR){
@@ -112,7 +147,26 @@ public class CapturePictureAutomatically extends MainActivity{
                     //forLanguageTag("bg-BG")
                 }
             }
+        });*/
+        textToSpeech = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status == TextToSpeech.SUCCESS) {
+                    int result = textToSpeech.setLanguage(Locale.forLanguageTag("bg-BG"));
+
+                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        Log.e("TTS", "Language not supported");
+                    } else {
+                        Log.i("TTS", "TextToSpeech initialized");
+                    }
+                    speak(introductoryWords);
+                } else {
+                    Log.e("TTS", "Initialization failed");
+                }
+            }
         });
+
+
 
 
         cameraProviderFuture = ProcessCameraProvider.getInstance(this);
@@ -168,8 +222,8 @@ public class CapturePictureAutomatically extends MainActivity{
             public void onClick(View view) {
                 capturePhoto();
                 AudioManager audioManager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
-                int minVolume = 0;//audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, minVolume, 0);
+                //int minVolume = 0;//audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                //audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, minVolume, 0);
 
                 //audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI);
                 //int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
@@ -191,32 +245,275 @@ public class CapturePictureAutomatically extends MainActivity{
                 //intent.putExtra(MediaStore.EXTRA_OUTPUT,imagePath);
             }
         });
+        //Toast.makeText(obj, "slusha me", Toast.LENGTH_SHORT).show();
 
-        speakText();
-       /* soundForListen = new Thread(new Runnable(){
+        //Toast.makeText(obj, "slusha me", Toast.LENGTH_SHORT).show();
+        //speakText();
+        callListening = true;
+        //Toast.makeText(this, "introductoryWords="+introductoryWords\, Toast.LENGTH_SHORT).show();
+
+        //textToSpeech.speak(introductoryWords, TextToSpeech.QUEUE_FLUSH, null);
+        soundForListen = new Thread(new Runnable(){
             public void run(){
                 while(true){
-                    try {
-                        //mediaPlayer.start();
-                        Thread.sleep(2000);
+                    if(mode==0){
 
-                        //mediaPlayer.setLooping(true);
-                        //checkForWords();
-                        //  Thread.sleep(5000);
-                       // mediaPlayer.setLooping(false);
-                        //speakText();
+                        if(!textToSpeech.isSpeaking()){
+                            //soundForListen.interrupt();
+                            //soundForListen.stop();
+                            mediaPlayer.start();
+                            try {
+                                Thread.sleep(2000);
+                                mediaPlayer.setLooping(true);
+
+                                Thread.sleep(5000);
+                                mediaPlayer.setLooping(false);
+                                //speakText();
+                                callListening = true;
+                                //startSpeechRecognition();
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
 
 
-                    } catch (InterruptedException ex) {
-                        //Logger.getLogger(AwesomeCarGame.class.getName()).log(Level.SEVERE, null, ex);
+                            mode = 1;
+                        }
                     }
+
+
+
                 }
             }
         });
-        soundForListen.start();*/
+        //soundForListen.start();
+        startSpeechRecognition();
+       // if(callListening){
 
+
+        //}
 
     }
+
+    private void startSpeechRecognition() {
+        editTextTextPersonName.setText("mode="+mode);
+        //Toast.makeText(this, "VLiza v startSpeechRecognition()", Toast.LENGTH_SHORT).show();
+        //Toast.makeText(this, "VLiza v startSpeechRecognition()", Toast.LENGTH_SHORT).show();
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        //Set up the intent for speech recognition
+        recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+
+
+        // Start listening for speech
+
+
+        speechRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onReadyForSpeech(Bundle bundle) {
+                //editTextTextMultiLine.setText("Pochva da slusha");
+            }
+
+            @Override
+            public void onBeginningOfSpeech() {
+
+            }
+
+            @Override
+            public void onRmsChanged(float v) {
+
+            }
+
+            @Override
+            public void onBufferReceived(byte[] bytes) {
+
+            }
+
+            @Override
+            public void onEndOfSpeech() {
+               // editTextTextMultiLine.setText("END");
+
+            }
+
+            @Override
+            public void onError(int i) {
+                //editTextShowText.setText("Error " + i);
+                speechRecognizer.startListening(recognizerIntent);
+                //speechRecognizer.startListening(recognizerIntent);
+            }
+
+            @Override
+            public void onResults(Bundle results) {
+                //editTextShowText.setText(" ");
+                // editTextTextMultiLine.setText("");
+                result = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+
+                //editTextTextMultiLine.setText("f"+ result.get(result.size() - 1));
+                //File file = new File("res/");
+                //if (file.exists()) {
+                /*try {
+                    InputStream inputStream = getAssets().open("recognizableoObjects-en.txt");
+                    int size = inputStream.available();
+                    byte[] buffer = new byte[size];
+                    inputStream.read(buffer);
+                    inputStream.close();
+                    String fileContents = new String(buffer);
+                    Toast.makeText(MainActivity.this, "fileContents="+fileContents, Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    // handle error
+                }*/
+                //}
+                Toast.makeText(CapturePictureAutomatically.this, "Vliza v mode 1"+result, Toast.LENGTH_SHORT).show();
+                // Влиза, когато са се прочели въвеждащите думи
+                if(mode == 1){
+                    //mediaPlayer.start();
+
+                    Toast.makeText(CapturePictureAutomatically.this, "Vliza v mode 1", Toast.LENGTH_SHORT).show();
+                    //soundForListen.start();
+
+                    if(result.contains("инструкции")){
+                        Toast.makeText(CapturePictureAutomatically.this, "vliza v proverka", Toast.LENGTH_SHORT).show();
+                        speak(instrucionWords);
+                        //
+                        //Toast.makeText(CapturePictureAutomatically.this, "Vliza v razpoznat", Toast.LENGTH_SHORT).show();
+                        //speak("Здравейте, почвам да ви слушам");
+                        editTextTextPersonName.setText("result"+result);
+                        //mode++;
+                    }
+
+                    //Toast.makeText(CapturePictureAutomatically.this, "Vliza v mode 2", Toast.LENGTH_SHORT).show();
+
+                    AssetManager assetManager = getAssets();
+                    try{
+                        InputStream inputStream = assetManager.open("recognizableoObjects-bg.txt");
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, Charset.forName("windows-1251")));
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            // do something with the line
+                            //result.contains("намери "+ line)
+                            if(result.contains("намери "+ line)){
+                                isrecognizable = true;
+                                break;
+
+                            }
+                            //editTextTextMultiLine.setText(line+" ");
+
+                            //Toast.makeText(this, "lin="+line, Toast.LENGTH_SHORT).show();
+                        }
+                        //editTextTextMultiLine.setText("isrecognizable= "+isrecognizable);
+
+                        if(isrecognizable == true){
+                            //soundForListen.interrupt();
+                            //soundForListen.stop();
+                            mediaPlayer.setLooping(false);
+                            speak("Този предмет може да се открие. Почва търсене");
+                            // Param is optional, to run task on UI thread.
+                            handler = new Handler(Looper.getMainLooper());
+                            runnable = new Runnable() {
+                                @Override
+                                public void run() {
+                                    // Do the task...
+                                    capturePhoto();
+                                    Toast.makeText(CapturePictureAutomatically.this, "Започна да прави снимки", Toast.LENGTH_SHORT).show();
+                                    handler.postDelayed(this, 5000);
+                                    // Optional, to repeat the task
+                                }
+                            };
+                            handler.postDelayed(runnable, 5000);
+//                            capturePhoto();
+                            mode++;
+                            //speak("Този предмет може да се открие");
+                        }else{
+                            speak("Този предмет не може да се открие");
+                        }
+                        reader.close();
+                    }catch(IOException e){
+                        e.printStackTrace();
+                    }
+
+                    //speak("Здравейте, почвам да ви слушам");
+                    //speak("Този предмет може да се открие");
+                }
+
+                speechRecognizer.startListening(recognizerIntent);
+                //Toast.makeText(MainActivity.this, "Tova e rezultata: "+result.get(0), Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onPartialResults(Bundle bundle) {
+                ArrayList<String> matches = bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (matches != null) {
+                    String match = matches.get(matches.size() - 1);
+                    //if(match.length() > 12) match = match.substring(match.length() - 12);
+                   // editTextTextMultiLine.setText("p"+ match);
+/*                    Toast.makeText(MainActivity.this, "Vliza v onPartialResults", Toast.LENGTH_SHORT).show();
+                    if(mode == 1){
+                        Toast.makeText(MainActivity.this, "Vliza v mode 1", Toast.LENGTH_SHORT).show();
+                        if(matches.contains("хей помощник") || matches.contains("hey pomoshtnik")){
+                            Toast.makeText(MainActivity.this, "Vliza v razpoznat", Toast.LENGTH_SHORT).show();
+                            speak("Здравейте, почвам да ви слушам");
+                            mode++;
+                        }
+                    }else if (mode == 2){
+                        Toast.makeText(MainActivity.this, "Vliza v mode 2", Toast.LENGTH_SHORT).show();
+                        boolean isrecognizable = false;
+                        AssetManager assetManager = getAssets();
+                        try{
+                            InputStream inputStream = assetManager.open("recognizableoObjects-bg.txt");
+                            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream,Charset.forName("windows-1251")));
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                // do something with the line
+                                if(matches.contains(line)){
+                                    isrecognizable = true;
+                                    break;
+
+                                }
+                                editTextTextMultiLine.setText(line+" ");
+                                //Toast.makeText(this, "lin="+line, Toast.LENGTH_SHORT).show();
+                            }
+                            editTextTextMultiLine.setText("isrecognizable="+isrecognizable);
+                            if(isrecognizable){
+                                textToSpeech.speak("Този предмет може да се открие", TextToSpeech.QUEUE_FLUSH, null);
+                                mode++;
+                                //speak("Този предмет може да се открие");
+                            }else{
+                                textToSpeech.speak("Този предмет не може да се открие", TextToSpeech.QUEUE_FLUSH, null);
+                                //speak("Този предмет не може да се открие");
+                            }
+                            reader.close();
+                        }catch(IOException e){
+                            e.printStackTrace();
+                        }
+
+
+                        speak("Здравейте, почвам да ви слушам");
+
+                    }
+
+
+                    /*for(String s : matches) {
+                        editTextShowText.setText("word: "+s);
+                    }*/
+                }
+            }
+
+            @Override
+            public void onEvent(int i, Bundle bundle) {
+            }
+        });
+        speechRecognizer.startListening(recognizerIntent);
+    }
+    private void speak(String text) {
+        textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null);
+    }
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        speechRecognizer.destroy();
+    }
+
     private void speakText() {
         // intent to show speech to text dialog
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
@@ -265,21 +562,6 @@ public class CapturePictureAutomatically extends MainActivity{
         }
     }
 
-
-
-    /*public void readSettingsFile(){
-        try {
-            BufferedReader br = new BufferedReader(new FileReader("myfile.txt"));
-            String line;
-            while ((line = br.readLine()) != null) {
-
-                System.out.println(line);
-            }
-            br.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }*/
     private class NetworkRequestTask extends AsyncTask<byte[], Void, String> {
 
         @Override
@@ -290,7 +572,8 @@ public class CapturePictureAutomatically extends MainActivity{
             HttpURLConnection client = null;
             OutputStream outputPost = null;
             try {
-                url = new URL("http://46.10.208.174:8033");
+            //http://46.10.208.174:8033
+                url = new URL("http://46.10.208.174:8033/?word=person&lang=bg");//"http://46.10.208.174:8033?word=" + URLEncoder.encode("wefewf", StandardCharsets.UTF_8.name()));
                 client = (HttpURLConnection) url.openConnection();
                 client.setRequestMethod("POST");
                 client.setDoInput(true);
@@ -329,7 +612,15 @@ public class CapturePictureAutomatically extends MainActivity{
         protected void onPostExecute(String result) {
             super.onPostExecute(result);
             Toast.makeText(CapturePictureAutomatically.this, result, Toast.LENGTH_SHORT).show();
-            t1.speak(result, TextToSpeech.QUEUE_FLUSH,null);
+            Toast.makeText(CapturePictureAutomatically.this, "vliza samo vuv funkciqta", Toast.LENGTH_SHORT).show();
+            //result = "";
+            if(result.equalsIgnoreCase("")){
+                Toast.makeText(CapturePictureAutomatically.this, "Vliza v nishto", Toast.LENGTH_SHORT).show();
+                textToSpeech.speak("Нищо не се разпознава", TextToSpeech.QUEUE_FLUSH,null);
+            }else{
+                textToSpeech.speak(result, TextToSpeech.QUEUE_ADD,null);
+            }
+
 
         }
     }
@@ -343,7 +634,7 @@ public class CapturePictureAutomatically extends MainActivity{
         Date date = new Date();
         SimpleDateFormat formatter = new SimpleDateFormat("dd/MM/yy");
         String str = formatter.format(date);
-        Toast.makeText(this, " " + str, Toast.LENGTH_SHORT).show();
+        //Toast.makeText(this, " " + str, Toast.LENGTH_SHORT).show();
         String timestamp = "blindHelper-" + str;// +System.currentTimeMillis();//+ Integer.parseInt(String.valueOf(now));
 
         ContentValues contentValues = new ContentValues();
@@ -362,6 +653,7 @@ public class CapturePictureAutomatically extends MainActivity{
                         Toast.makeText(CapturePictureAutomatically.this, "Photo has been saved successfully", Toast.LENGTH_SHORT).show();
 
                         new NetworkRequestTask().execute(result.toByteArray());
+                        //new NetworkRequestTask().execute("човек".toByteArray());
                     }
 
                     @Override

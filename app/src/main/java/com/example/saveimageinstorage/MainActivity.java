@@ -82,11 +82,11 @@ public class MainActivity extends AppCompatActivity {
         }else if(ActivityCompat.checkSelfPermission(MainActivity.this,Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             activityResultLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE);
         }else{
-            try {
+            /*try {
                 getImages();
             } catch (IOException e) {
                 e.printStackTrace();
-            }
+            }*/
 
         }
         //TODO Kak Python да върне резултат на телефона
